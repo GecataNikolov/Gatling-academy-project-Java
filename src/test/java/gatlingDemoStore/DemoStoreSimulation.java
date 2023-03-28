@@ -6,6 +6,7 @@ import static io.gatling.javaapi.http.HttpDsl.*;
 import io.gatling.javaapi.core.*;
 import io.gatling.javaapi.http.*;
 
+import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;
 
 
@@ -27,12 +28,7 @@ public class DemoStoreSimulation extends Simulation {
                     .exec(session -> session.set("randomNumber", ThreadLocalRandom.current().nextInt()))
                     .exec(session -> session.set("customerLoggedIn", false))
                     .exec(session -> session.set("cartTotal", 0.00))
-                    .exec(addCookie(Cookie("sessionId", SessionId.random()).withDomain(DOMAIN)))
-                    .exec(
-                            session -> {
-                                System.out.println(session.toString());
-                                return session;
-                            });
+                    .exec(addCookie(Cookie("sessionId", SessionId.random()).withDomain(DOMAIN)));
 
     private static class CmsPages {
 
@@ -70,7 +66,8 @@ public class DemoStoreSimulation extends Simulation {
                             .exec(
                                     http("Add Product to Cart")
                                             .get("/cart/add/#{id}")
-                                            .check(substring("items in your cart")));
+                                            .check(substring("items in your cart")))
+                            .exec(session -> session.set("cartTotal", session.getDouble("cartTotal") + session.getDouble("price")));
         }
     }
 
@@ -83,11 +80,19 @@ public class DemoStoreSimulation extends Simulation {
                                         .post("/login")
                                         .formParam("_csrf", "#{csrfValue}")
                                         .formParam("username", "#{username}")
-                                        .formParam("password", "#{password}"));
+                                        .formParam("password", "#{password}"))
+                        .exec(session -> session.set("customerLoggedIn", true));
     }
 
     private static class Checkout {
-        private static final ChainBuilder viewCart = exec(http("Load Cart Page").get("/cart/view"));
+        private static final ChainBuilder viewCart =
+                doIf(session -> !session.getBoolean("customerLoggedIn"))
+                        .then(exec(Customer.login))
+                        .exec(http("Load Cart Page")
+                                .get("/cart/view")
+                                .check(status().is(200))
+                                .check(css("#grandTotal").isEL("$#{cartTotal}")));
+
 
         private static final ChainBuilder completeCheckout =
                 exec(
@@ -95,6 +100,7 @@ public class DemoStoreSimulation extends Simulation {
                                 .get("/cart/checkout")
                                 .check(substring("Thanks for your order! See you soon!")));
     }
+
 
     private static final ScenarioBuilder scn =
             scenario("DemostoreSimulation")
@@ -109,11 +115,26 @@ public class DemoStoreSimulation extends Simulation {
                     .pause(2)
                     .exec(Checkout.viewCart)
                     .pause(2)
-                    .exec(Customer.login)
-                    .pause(2)
                     .exec(Checkout.completeCheckout);
 
+    //     OPEN MODEL SIMULATION
     {
-        setUp(scn.injectOpen(atOnceUsers(1))).protocols(HTTP_PROTOCOL);
+        setUp(
+                scn.injectOpen(
+                        atOnceUsers(1),
+                        nothingFor(Duration.ofSeconds(5)),
+                        rampUsers(10).during(Duration.ofSeconds(10)),
+                        nothingFor(Duration.ofSeconds(10)),
+                        constantUsersPerSec(1).during(Duration.ofSeconds(20))
+                )
+        ).protocols(HTTP_PROTOCOL);
     }
+
+//    {
+//        setUp(scn.injectClosed(
+//                constantConcurrentUsers(5).during(Duration.ofSeconds(20)),
+//                rampConcurrentUsers(1).to(5).during(Duration.ofSeconds(10))
+//        ).protocols(HTTP_PROTOCOL));
+//
+//    }
 }
