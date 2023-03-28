@@ -1,6 +1,12 @@
 package gatlingDemoStore;
 
+import gatlingDemoStore.helpers.SimulationDefaults;
+import io.gatling.javaapi.core.ChainBuilder;
+
 import java.util.concurrent.ThreadLocalRandom;
+
+import static io.gatling.javaapi.core.CoreDsl.exec;
+import static io.gatling.javaapi.http.HttpDsl.*;
 
 public class SessionId {
 
@@ -15,4 +21,11 @@ public class SessionId {
         }
         return buffer.toString();
     }
+
+    public static final ChainBuilder initSession =
+            exec(flushCookieJar())
+                    .exec(session -> session.set("randomNumber", ThreadLocalRandom.current().nextInt()))
+                    .exec(session -> session.set("customerLoggedIn", false))
+                    .exec(session -> session.set("cartTotal", 0.00))
+                    .exec(addCookie(Cookie("sessionId", SessionId.random()).withDomain(SimulationDefaults.DOMAIN)));
 }
