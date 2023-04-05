@@ -40,24 +40,26 @@ public class DemoStoreRestApiSimulation extends Simulation {
     }
 
     private static class Category {
+        private static FeederBuilder.Batchable<String> categories = csv("demostoreapisimulation/category.csv").random();
         private static ChainBuilder listCategories =
                 exec(http("List Categories")
                         .get("/api/category")
                         .check(jsonPath("$[?(@.id == 6)].name").is("For Her"))
                 );
         private static ChainBuilder updateCategory =
-                exec(Authenticate.authenticate)
+                feed(categories)
+                        .exec(Authenticate.authenticate)
                         .exec(
                                 http("Update category")
-                                        .put("/api/category/7")
+                                        .put("/api/category/#{categoryId}")
                                         .headers(authorizationHeader)
-                                        .body(StringBody("{\"name\":\"Everyone\"}"))
+                                        .body(StringBody("{\"name\":\"#{categoryName}\"}"))
                                         .check(status().is(200))
-                                        .check(jsonPath("$.name").is("Everyone")
-                                        ));
+                                        .check(jsonPath("$.name").isEL("#{categoryName}")));
     }
 
     public static class Product {
+        private static FeederBuilder.Batchable<String> products = csv("demostoreapisimulation/products.csv").circular();
         private static ChainBuilder listProduct =
                 exec(http("List products")
                         .get("/api/product?category=7")
@@ -79,17 +81,15 @@ public class DemoStoreRestApiSimulation extends Simulation {
                                         .check(jsonPath("$.price").is("15.99"))
                         );
 
-        private static ChainBuilder createProducts =
-                repeat(3, "counter").on(
-                        exec(Authenticate.authenticate)
-                                .exec(
-                                        http("Create product #{counter}")
-                                                .post("/api/product")
-                                                .headers(authorizationHeader)
-                                                .body(RawFileBody("demostoreapisimulation/create-product-#{counter}.json"))
-                                )
-                                .pause(2)
-                );
+        private static ChainBuilder createProduct =
+                feed(products)
+                        .exec(Authenticate.authenticate)
+                        .exec(
+                                http("Create product #{productName}")
+                                        .post("/api/product")
+                                        .headers(authorizationHeader)
+                                        .body(ElFileBody("demostoreapisimulation/create-product.json"))
+                        );
     }
 
 
@@ -103,7 +103,7 @@ public class DemoStoreRestApiSimulation extends Simulation {
             .pause(2)
             .exec(Product.updateProduct)
             .pause(2)
-            .exec(Product.createProducts)
+            .repeat(3).on(exec(Product.createProduct))
             .pause(2)
             .exec(Category.updateCategory);
 
