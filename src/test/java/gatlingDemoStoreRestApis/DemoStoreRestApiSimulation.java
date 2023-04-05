@@ -8,7 +8,9 @@ import io.gatling.javaapi.http.*;
 
 import static io.gatling.javaapi.http.HttpDsl.*;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
 
 public class DemoStoreRestApiSimulation extends Simulation {
@@ -40,7 +42,7 @@ public class DemoStoreRestApiSimulation extends Simulation {
     }
 
     private static class Category {
-        private static FeederBuilder.Batchable<String> categories = csv("demostoreapisimulation/category.csv").random();
+        private static FeederBuilder.Batchable<String> categories = csv("demostoreapisimulation/feeders/category.csv").random();
         private static ChainBuilder listCategories =
                 exec(http("List Categories")
                         .get("/api/category")
@@ -59,26 +61,41 @@ public class DemoStoreRestApiSimulation extends Simulation {
     }
 
     public static class Product {
-        private static FeederBuilder.Batchable<String> products = csv("demostoreapisimulation/products.csv").circular();
-        private static ChainBuilder listProduct =
+        private static FeederBuilder.Batchable<String> products = csv("demostoreapisimulation/feeders/products.csv").circular();
+
+        private static ChainBuilder listProducts =
                 exec(http("List products")
                         .get("/api/product?category=7")
                         .check(jsonPath("$[?(@.categoryId != \"7\")]").notExists())
+                        .check(jmesPath("[*].id").ofList().saveAs("allProductIds"))
                 );
         private static ChainBuilder getProduct =
-                exec(Authenticate.authenticate)
-                        .exec(http("Get product")
-                                .get("/api/product/34")
-                                .check(jsonPath("$.id").ofInt().is(34))
+                exec(session -> {
+                    List<Integer> allProducts = session.getList("allProductIds");
+                    return session.set("productId", allProducts.get(new Random().nextInt(allProducts.size())));
+                })
+                        .exec(http("Get product- #{productId}")
+                                .get("/api/product/#{productId}")
+                                .check(jsonPath("$.id").ofInt().isEL("#{productId}"))
+                                .check(jmesPath("@").ofMap().saveAs("product"))
                         );
         private static ChainBuilder updateProduct =
                 exec(Authenticate.authenticate)
+                        .exec(session -> {
+                            Map<String, Object> product = session.getMap("product");
+                            return session.set("productCategoryId", product.get("categoryId"))
+                                    .set("productPrice", product.get("price"))
+                                    .set("productName", product.get("name"))
+                                    .set("productDescription", product.get("description"))
+                                    .set("productImage", product.get("image"))
+                                    .set("productId", product.get("id"));
+                        })
                         .exec(
-                                http("Update Product")
-                                        .put("/api/product/34")
+                                http("Update Product - #{productName}")
+                                        .put("/api/product/#{productId}")
                                         .headers(authorizationHeader)
-                                        .body(RawFileBody("demostoreapisimulation/update-product-1.json"))
-                                        .check(jsonPath("$.price").is("15.99"))
+                                        .body(ElFileBody("demostoreapisimulation/requestBodyData/create-product.json"))
+                                        .check(jsonPath("$.price").isEL("#{productPrice}"))
                         );
 
         private static ChainBuilder createProduct =
@@ -88,7 +105,7 @@ public class DemoStoreRestApiSimulation extends Simulation {
                                 http("Create product #{productName}")
                                         .post("/api/product")
                                         .headers(authorizationHeader)
-                                        .body(ElFileBody("demostoreapisimulation/create-product.json"))
+                                        .body(ElFileBody("demostoreapisimulation/requestBodyData/create-product.json"))
                         );
     }
 
@@ -97,7 +114,7 @@ public class DemoStoreRestApiSimulation extends Simulation {
             .exec(initSession)
             .exec(Category.listCategories)
             .pause(2)
-            .exec(Product.listProduct)
+            .exec(Product.listProducts)
             .pause(2)
             .exec(Product.getProduct)
             .pause(2)
