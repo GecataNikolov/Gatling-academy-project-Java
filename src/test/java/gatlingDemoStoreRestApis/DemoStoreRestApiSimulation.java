@@ -26,6 +26,9 @@ public class DemoStoreRestApiSimulation extends Simulation {
             Map.entry("authorization", "Bearer #{jwt}")
     );
 
+    public static final int USER_COUNT = Integer.parseInt(System.getProperty("USERS", "5"));
+    public static final Duration RAMP_DURATION = Duration.ofSeconds(Integer.parseInt(System.getProperty("RAMP_DURATION", "10")));
+    public static final Duration TEST_DURATION = Duration.ofSeconds(Integer.parseInt(System.getProperty("TEST_DURATION", "10")));
 
     private static ChainBuilder initSession =
             exec(session -> session.set("isAuthenticated", false));
@@ -117,7 +120,7 @@ public class DemoStoreRestApiSimulation extends Simulation {
 
 
     private static class UserJourneys {
-        private final static Duration minTimeout = Duration.ofMillis(200);
+        private final static Duration minTimeout = Duration.ofMillis(900);
         private final static Duration maxTimeout = Duration.ofSeconds(2);
 
         public static ChainBuilder admin =
@@ -132,12 +135,12 @@ public class DemoStoreRestApiSimulation extends Simulation {
                         .pause(minTimeout, maxTimeout)
                         .repeat(3).on(Product.createProduct)
                         .pause(minTimeout, maxTimeout)
-                        .exec(Category.updateCategory);
+                        .exec(Category.updateCategory)
+                        .pause(minTimeout, maxTimeout);
 
         private static ChainBuilder priceScrapper =
                 exec(
                         Category.listCategories,
-                        pause(minTimeout, maxTimeout),
                         Product.listAllProducts
                 );
         private static ChainBuilder priceUpdater =
@@ -156,7 +159,7 @@ public class DemoStoreRestApiSimulation extends Simulation {
     private static class Scenario {
         public static ScenarioBuilder defaultScn =
                 scenario("Default Load Test scenario")
-                        .during(Duration.ofSeconds(60)).
+                        .during(TEST_DURATION).
                         on(
                                 randomSwitch().on(
                                         Choice.withWeight(20d, exec(UserJourneys.admin)),
@@ -166,7 +169,7 @@ public class DemoStoreRestApiSimulation extends Simulation {
                         );
 
         public static ScenarioBuilder noAdminScn = scenario("Load test without admin")
-                .during(Duration.ofSeconds(60))
+                .during(TEST_DURATION)
                 .on(
                         randomSwitch().on(
                                 Choice.withWeight(40d, UserJourneys.priceScrapper),
@@ -176,12 +179,20 @@ public class DemoStoreRestApiSimulation extends Simulation {
 
     }
 
+    @Override
+    public void before() {
+        System.out.printf("Test duration is set to: %d\n", TEST_DURATION.getSeconds());
+        System.out.printf("Ramping with %d users over %s seconds\n", USER_COUNT, RAMP_DURATION.getSeconds());
+    }
 
+    //Sequential execution of scenarios
     {
         setUp(
-                Scenario.defaultScn.injectOpen(atOnceUsers(1)),
-                Scenario.noAdminScn.injectOpen(atOnceUsers(1))
-        ).protocols(httpProtocol);
+                Scenario.defaultScn.injectOpen(rampUsers(USER_COUNT).during(RAMP_DURATION))
+                        .protocols(httpProtocol)
+                        .andThen(Scenario.noAdminScn.injectOpen(rampUsers(USER_COUNT).during(RAMP_DURATION))
+                                .protocols(httpProtocol)));
+
     }
 
 }
