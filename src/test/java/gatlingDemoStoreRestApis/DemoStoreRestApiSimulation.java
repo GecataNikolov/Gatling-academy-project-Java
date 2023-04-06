@@ -8,6 +8,7 @@ import io.gatling.javaapi.http.*;
 
 import static io.gatling.javaapi.http.HttpDsl.*;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -63,6 +64,11 @@ public class DemoStoreRestApiSimulation extends Simulation {
     public static class Product {
         private static FeederBuilder.Batchable<String> products = csv("demostoreapisimulation/feeders/products.csv").circular();
 
+        public static ChainBuilder listAllProducts = exec(http("List all products")
+                .get("/api/product")
+                .check(jmesPath("@").ofList().saveAs("allProducts"))
+        );
+
         private static ChainBuilder listProducts =
                 exec(http("List products")
                         .get("/api/product?category=7")
@@ -110,22 +116,72 @@ public class DemoStoreRestApiSimulation extends Simulation {
     }
 
 
-    private ScenarioBuilder scn = scenario("DemoStoreRestApiSimulation")
-            .exec(initSession)
-            .exec(Category.listCategories)
-            .pause(2)
-            .exec(Product.listProducts)
-            .pause(2)
-            .exec(Product.getProduct)
-            .pause(2)
-            .exec(Product.updateProduct)
-            .pause(2)
-            .repeat(3).on(exec(Product.createProduct))
-            .pause(2)
-            .exec(Category.updateCategory);
+    private static class UserJourneys {
+        private final static Duration minTimeout = Duration.ofMillis(200);
+        private final static Duration maxTimeout = Duration.ofSeconds(2);
+
+        public static ChainBuilder admin =
+                exec(initSession)
+                        .exec(Category.listCategories)
+                        .pause(minTimeout, maxTimeout)
+                        .exec(Product.listProducts)
+                        .pause(minTimeout, maxTimeout)
+                        .exec(Product.getProduct)
+                        .pause(minTimeout, maxTimeout)
+                        .exec(Product.updateProduct)
+                        .pause(minTimeout, maxTimeout)
+                        .repeat(3).on(Product.createProduct)
+                        .pause(minTimeout, maxTimeout)
+                        .exec(Category.updateCategory);
+
+        private static ChainBuilder priceScrapper =
+                exec(
+                        Category.listCategories,
+                        pause(minTimeout, maxTimeout),
+                        Product.listAllProducts
+                );
+        private static ChainBuilder priceUpdater =
+                exec(initSession)
+                        .exec(Product.listAllProducts)
+                        .repeat("#{allProducts.size()}", "productIndex").on(
+                                exec(session -> {
+                                    int index = session.getInt("productIndex");
+                                    List<Object> allProducts = session.getList("allProducts");
+                                    return session.set("product", allProducts.get(index));
+                                })
+                                        .exec(Product.updateProduct)
+                        );
+    }
+
+    private static class Scenario {
+        public static ScenarioBuilder defaultScn =
+                scenario("Default Load Test scenario")
+                        .during(Duration.ofSeconds(60)).
+                        on(
+                                randomSwitch().on(
+                                        Choice.withWeight(20d, exec(UserJourneys.admin)),
+                                        Choice.withWeight(40d, exec(UserJourneys.priceScrapper)),
+                                        Choice.withWeight(40d, exec(UserJourneys.priceUpdater))
+                                )
+                        );
+
+        public static ScenarioBuilder noAdminScn = scenario("Load test without admin")
+                .during(Duration.ofSeconds(60))
+                .on(
+                        randomSwitch().on(
+                                Choice.withWeight(40d, UserJourneys.priceScrapper),
+                                Choice.withWeight(60d, UserJourneys.priceUpdater)
+                        )
+                );
+
+    }
+
 
     {
-        setUp(scn.injectOpen(atOnceUsers(1))).protocols(httpProtocol);
+        setUp(
+                Scenario.defaultScn.injectOpen(atOnceUsers(1)),
+                Scenario.noAdminScn.injectOpen(atOnceUsers(1))
+        ).protocols(httpProtocol);
     }
 
 }
